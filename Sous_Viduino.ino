@@ -1,4 +1,6 @@
 //-------------------------------------------------------------------
+// Port to use DX LCD Shield
+// Ricardo Santana
 //
 // Sous Vide Controller
 // Bill Earl - for Adafruit Industries
@@ -11,10 +13,9 @@
 #include <PID_v1.h>
 #include <PID_AutoTune_v0.h>
 
-// Libraries for the Adafruit RGB/LCD Shield
+// Libraries for the LCD Shield
 #include <Wire.h>
-#include <Adafruit_MCP23017.h>
-#include <Adafruit_RGBLCDShield.h>
+#include <LiquidCrystal.h>
 
 // Libraries for the DS18B20 Temperature Sensor
 #include <OneWire.h>
@@ -28,19 +29,20 @@
 // ************************************************
 
 // Output Relay
-#define RelayPin 7
+#define RelayPin 12
+#define RelayPinGnd 13
 
 // One-Wire Temperature Sensor
 // (Use GPIO pins for power/ground to simplify the wiring)
 #define ONE_WIRE_BUS 2
 #define ONE_WIRE_PWR 3
-#define ONE_WIRE_GND 4
+#define ONE_WIRE_GND 11
 
 // ************************************************
 // PID Variables and constants
 // ************************************************
 
-//Define Variables we'll be connecting to
+// Define Variables we'll be connecting to
 double Setpoint;
 double Input;
 double Output;
@@ -58,7 +60,7 @@ const int KpAddress = 8;
 const int KiAddress = 16;
 const int KdAddress = 24;
 
-//Specify the links and initial tuning parameters
+// Specify the links and initial tuning parameters
 PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, DIRECT);
 
 // 10 second Time Proportional Output window
@@ -79,18 +81,17 @@ boolean tuning = false;
 PID_ATune aTune(&Input, &Output);
 
 // ************************************************
-// DiSplay Variables and constants
+// Display Variables and constants
 // ************************************************
 
-Adafruit_RGBLCDShield lcd = Adafruit_RGBLCDShield();
-// These #defines make it easy to set the backlight color
-#define RED 0x1
-#define YELLOW 0x3
-#define GREEN 0x2
-#define TEAL 0x6
-#define BLUE 0x4
-#define VIOLET 0x5
-#define WHITE 0x7
+LiquidCrystal lcd (8, 9, 4, 5, 6, 7);
+
+#define BUTTON_RIGHT 0
+#define BUTTON_LEFT 6
+#define BUTTON_UP 1
+#define BUTTON_DOWN 4
+#define BUTTON_SELECT 10
+#define BUTTON_NONE 15
 
 #define BUTTON_SHIFT BUTTON_SELECT
 
@@ -114,7 +115,7 @@ long lastLogTime = 0;
 // ************************************************
 // States for state machine
 // ************************************************
-enum operatingState { OFF = 0, SETP, RUN, TUNE_P, TUNE_I, TUNE_D, AUTO};
+enum operatingState { OFF = 0, SETP, RUN, TUNE_P, TUNE_I, TUNE_D, AUTO };
 operatingState opState = OFF;
 
 // ************************************************
@@ -142,6 +143,9 @@ void setup()
    pinMode(RelayPin, OUTPUT);    // Output mode to drive relay
    digitalWrite(RelayPin, LOW);  // make sure it is off to start
 
+   pinMode(RelayPinGnd, OUTPUT);  // Ground for LED
+   digitalWrite(RelayPinGnd, LOW);
+   
    // Set up Ground & Power for the sensor from GPIO pins
 
    pinMode(ONE_WIRE_GND, OUTPUT);
@@ -155,8 +159,8 @@ void setup()
    lcd.begin(16, 2);
    lcd.createChar(1, degree); // create degree symbol from the binary
    
-   lcd.setBacklight(VIOLET);
-   lcd.print(F("    Adafruit"));
+   lcd.setCursor(0, 0);
+   lcd.print(F(" Ricardo Santana"));
    lcd.setCursor(0, 1);
    lcd.print(F("   Sous Vide!"));
 
@@ -166,7 +170,7 @@ void setup()
    if (!sensors.getAddress(tempSensor, 0)) 
    {
       lcd.setCursor(0, 1);
-      lcd.print(F("Sensor Error"));
+      lcd.print(F("Erro no Sensor"));
    }
    sensors.setResolution(tempSensor, 12);
    sensors.setWaitForConversion(false);
@@ -211,7 +215,7 @@ SIGNAL(TIMER2_OVF_vect)
 void loop()
 {
    // wait for button release before changing state
-   while(ReadButtons() != 0) {}
+   while(ReadButtons() != 15) {}
 
    lcd.clear();
 
@@ -244,14 +248,13 @@ void loop()
 void Off()
 {
    myPID.SetMode(MANUAL);
-   lcd.setBacklight(0);
    digitalWrite(RelayPin, LOW);  // make sure it is off
-   lcd.print(F("    Adafruit"));
+   lcd.print(F(" Ricardo Santana"));
    lcd.setCursor(0, 1);
    lcd.print(F("   Sous Vide!"));
-   uint8_t buttons = 0;
+   int buttons = 15;
    
-   while(!(buttons & (BUTTON_RIGHT)))
+   while(buttons != BUTTON_RIGHT)
    {
       buttons = ReadButtons();
    }
@@ -273,34 +276,33 @@ void Off()
 // ************************************************
 void Tune_Sp()
 {
-   lcd.setBacklight(TEAL);
-   lcd.print(F("Set Temperature:"));
-   uint8_t buttons = 0;
+   lcd.print(F("Temperatura:"));
+   int buttons = 15;
    while(true)
    {
       buttons = ReadButtons();
 
       float increment = 0.1;
-      if (buttons & BUTTON_SHIFT)
+      if (buttons == BUTTON_SHIFT)
       {
         increment *= 10;
       }
-      if (buttons & BUTTON_LEFT)
+      if (buttons == BUTTON_LEFT)
       {
          opState = RUN;
          return;
       }
-      if (buttons & BUTTON_RIGHT)
+      if (buttons == BUTTON_RIGHT)
       {
          opState = TUNE_P;
          return;
       }
-      if (buttons & BUTTON_UP)
+      if (buttons == BUTTON_UP)
       {
          Setpoint += increment;
          delay(200);
       }
-      if (buttons & BUTTON_DOWN)
+      if (buttons == BUTTON_DOWN)
       {
          Setpoint -= increment;
          delay(200);
@@ -327,35 +329,34 @@ void Tune_Sp()
 // ************************************************
 void TuneP()
 {
-   lcd.setBacklight(TEAL);
-   lcd.print(F("Set Kp"));
+   lcd.print(F("Kp:"));
 
-   uint8_t buttons = 0;
+   int buttons = 15;
    while(true)
    {
       buttons = ReadButtons();
 
       float increment = 1.0;
-      if (buttons & BUTTON_SHIFT)
+      if (buttons == BUTTON_SHIFT)
       {
         increment *= 10;
       }
-      if (buttons & BUTTON_LEFT)
+      if (buttons == BUTTON_LEFT)
       {
          opState = SETP;
          return;
       }
-      if (buttons & BUTTON_RIGHT)
+      if (buttons == BUTTON_RIGHT)
       {
          opState = TUNE_I;
          return;
       }
-      if (buttons & BUTTON_UP)
+      if (buttons == BUTTON_UP)
       {
          Kp += increment;
          delay(200);
       }
-      if (buttons & BUTTON_DOWN)
+      if (buttons == BUTTON_DOWN)
       {
          Kp -= increment;
          delay(200);
@@ -381,35 +382,34 @@ void TuneP()
 // ************************************************
 void TuneI()
 {
-   lcd.setBacklight(TEAL);
-   lcd.print(F("Set Ki"));
+   lcd.print(F("Ki:"));
 
-   uint8_t buttons = 0;
+   int buttons = 15;
    while(true)
    {
       buttons = ReadButtons();
 
       float increment = 0.01;
-      if (buttons & BUTTON_SHIFT)
+      if (buttons == BUTTON_SHIFT)
       {
         increment *= 10;
       }
-      if (buttons & BUTTON_LEFT)
+      if (buttons == BUTTON_LEFT)
       {
          opState = TUNE_P;
          return;
       }
-      if (buttons & BUTTON_RIGHT)
+      if (buttons == BUTTON_RIGHT)
       {
          opState = TUNE_D;
          return;
       }
-      if (buttons & BUTTON_UP)
+      if (buttons == BUTTON_UP)
       {
          Ki += increment;
          delay(200);
       }
-      if (buttons & BUTTON_DOWN)
+      if (buttons == BUTTON_DOWN)
       {
          Ki -= increment;
          delay(200);
@@ -435,34 +435,33 @@ void TuneI()
 // ************************************************
 void TuneD()
 {
-   lcd.setBacklight(TEAL);
-   lcd.print(F("Set Kd"));
+   lcd.print(F("Kd:"));
 
-   uint8_t buttons = 0;
+   int buttons = 15;
    while(true)
    {
       buttons = ReadButtons();
       float increment = 0.01;
-      if (buttons & BUTTON_SHIFT)
+      if (buttons == BUTTON_SHIFT)
       {
         increment *= 10;
       }
-      if (buttons & BUTTON_LEFT)
+      if (buttons == BUTTON_LEFT)
       {
          opState = TUNE_I;
          return;
       }
-      if (buttons & BUTTON_RIGHT)
+      if (buttons == BUTTON_RIGHT)
       {
          opState = RUN;
          return;
       }
-      if (buttons & BUTTON_UP)
+      if (buttons == BUTTON_UP)
       {
          Kd += increment;
          delay(200);
       }
-      if (buttons & BUTTON_DOWN)
+      if (buttons == BUTTON_DOWN)
       {
          Kd -= increment;
          delay(200);
@@ -496,24 +495,22 @@ void Run()
    SaveParameters();
    myPID.SetTunings(Kp,Ki,Kd);
 
-   uint8_t buttons = 0;
+   int buttons = 15;
    while(true)
    {
-      setBacklight();  // set backlight based on state
-
       buttons = ReadButtons();
-      if ((buttons & BUTTON_SHIFT) 
-         && (buttons & BUTTON_RIGHT) 
+      if (((buttons == BUTTON_SHIFT) 
+         || (buttons == BUTTON_RIGHT))
          && (abs(Input - Setpoint) < 0.5))  // Should be at steady-state
       {
          StartAutoTune();
       }
-      else if (buttons & BUTTON_RIGHT)
+      else if (buttons == BUTTON_RIGHT)
       {
         opState = SETP;
         return;
       }
-      else if (buttons & BUTTON_LEFT)
+      else if (buttons == BUTTON_LEFT)
       {
         opState = OFF;
         return;
@@ -607,29 +604,6 @@ void DriveOutput()
 }
 
 // ************************************************
-// Set Backlight based on the state of control
-// ************************************************
-void setBacklight()
-{
-   if (tuning)
-   {
-      lcd.setBacklight(VIOLET); // Tuning Mode
-   }
-   else if (abs(Input - Setpoint) > 1.0)  
-   {
-      lcd.setBacklight(RED);  // High Alarm - off by more than 1 degree
-   }
-   else if (abs(Input - Setpoint) > 0.2)  
-   {
-      lcd.setBacklight(YELLOW);  // Low Alarm - off by more than 0.2 degrees
-   }
-   else
-   {
-      lcd.setBacklight(WHITE);  // We're on target!
-   }
-}
-
-// ************************************************
 // Start the Auto-Tuning cycle
 // ************************************************
 
@@ -668,14 +642,17 @@ void FinishAutoTune()
 // ************************************************
 // Check buttons and time-stamp the last press
 // ************************************************
-uint8_t ReadButtons()
+int ReadButtons()
 {
-  uint8_t buttons = lcd.readButtons();
-  if (buttons != 0)
+  int buttonVoltage = analogRead(0);
+  int buttonPressed = buttonVoltage >> 6; //this removes least significant bits to get more stable reads.
+
+  if (buttonPressed != 15)
   {
     lastInput = millis();
   }
-  return buttons;
+  
+  return buttonPressed;
 }
 
 // ************************************************
@@ -730,7 +707,6 @@ void LoadParameters()
      Kd = 0.1;
    }  
 }
-
 
 // ************************************************
 // Write floating point values to EEPROM
